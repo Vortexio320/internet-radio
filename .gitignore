@@ -1,0 +1,16 @@
+# C/C++ compiled files
+*.o
+*.out
+server/radio_server
+
+# Python caches
+__pycache__/
+*.py[cod]
+venv/
+
+# IDE settings (VS Code, JetBrains)
+.vscode/
+.idea/
+
+# System files
+.DS_Store
