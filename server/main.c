@@ -6,21 +6,85 @@
 #include <pthread.h>
 
 #define PORT 8080
+#define BUFFER_SIZE 1024
+#define MAX_SONGS 100
+#define MAX_FILENAME 100
+
+char playlist[MAX_SONGS][MAX_FILENAME];
+int song_count = 0;
+
+pthread_mutex_t playlist_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+
 
 void *handle_client(void *socket_desc) {
     int sock = *(int*)socket_desc;
-    
     free(socket_desc);
 
-    char *message = "Witaj! Jestes podlaczony do serwera wielowatkowego.\n";
-    send(sock, message, strlen(message), 0);
+    char buffer[BUFFER_SIZE];
+    int bytes_read;
+
+    printf("Watek: Klient %d podlaczony. Czekam na komendy.\n", sock);
     
-    printf("Watek: Obsluzylem klienta na sockecie %d.\n", sock);
+    //instrukcja dla klienta
+    char *help = "Witaj! Komendy: ADD <nazwa>, LIST, EXIT\n";
+    send(sock, help, strlen(help), 0);
 
-    //10 sekund sluchania radia, potem bedzie rozwiniete
-    sleep(10); 
+    //petla do komunikacji z klientem
+    while ((bytes_read = recv(sock, buffer, BUFFER_SIZE, 0)) > 0) {
+        buffer[bytes_read] = '\0';
+        buffer[strcspn(buffer, "\r\n")] = 0;
+        printf("Klient %d wyslal: %s\n", sock, buffer);
 
-    printf("Watek: Klient rozlaczony.\n");
+        if (strncmp(buffer, "LIST", 4) == 0) {
+            pthread_mutex_lock(&playlist_mutex);
+            
+            char response[BUFFER_SIZE * 4] = "";
+            if (song_count == 0) {
+                strcat(response, "Playlista jest pusta.\n");
+            } else {
+                strcat(response, "--- PLAYLISTA ---\n");
+                for (int i = 0; i < song_count; i++) {
+                    char line[MAX_FILENAME + 32];
+                    snprintf(line, sizeof(line), "%d. %s\n", i + 1, playlist[i]);
+                    strcat(response, line);
+                }
+            }
+            
+            pthread_mutex_unlock(&playlist_mutex);
+
+            send(sock, response, strlen(response), 0);
+        }
+        else if (strncmp(buffer, "ADD ", 4) == 0) {
+            char *filename = buffer + 4; //nazwa pliku od 5 znaku linii
+            
+            if (strlen(filename) > 0) {
+                pthread_mutex_lock(&playlist_mutex);
+                
+                if (song_count < MAX_SONGS) {
+                    strncpy(playlist[song_count], filename, MAX_FILENAME);
+                    song_count++;
+                    char *msg = "OK; Dodano utwor.\n";
+                    send(sock, msg, strlen(msg), 0);
+                    printf("Dodano utwor: %s (razem: %d)\n", filename, song_count);
+                } else {
+                    char *msg = "ERROR; Kolejka pelna.\n";
+                    send(sock, msg, strlen(msg), 0);
+                }
+
+                pthread_mutex_unlock(&playlist_mutex);
+            }
+        }
+        else if (strcmp(buffer, "EXIT") == 0) {
+            break;
+        }
+        else {
+            char *msg = "ERROR; Nieznana komenda.\n";
+            send(sock, msg, strlen(msg), 0);
+        }
+    }
+
+    printf("Watek: Klient %d rozlaczony.\n", sock);
     close(sock);
     return NULL;
 }
@@ -52,28 +116,25 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Serwer wielowatkowy gotowy na porcie %d...\n", PORT);
+    printf("Serwer (Kolejka + Mutex) gotowy na porcie %d...\n", PORT);
 
     while (1) {
         new_sock = malloc(sizeof(int));
-        
         if ((*new_sock = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
             perror("Accept failed");
             free(new_sock);
             continue;
         }
 
-        printf("Main: Nowe polaczenie! Tworze watek...\n");
-
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, handle_client, (void*)new_sock) < 0) {
-            perror("Nie udalo sie utworzyc watku");
+            perror("Thread create failed");
             free(new_sock);
             continue;
         }
-
         pthread_detach(thread_id);
     }
-
+    
+    pthread_mutex_destroy(&playlist_mutex); //just in case
     return 0;
 }
