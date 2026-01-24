@@ -25,6 +25,9 @@ mutex playlist_mutex;
 vector<int> listeners;
 mutex listeners_mutex;
 
+vector<int> cmd_clients;
+mutex cmd_clients_mutex;
+
 // Atomic flags for thread synchronization
 atomic<bool> skip_requested(false);
 atomic<bool> suppress_logs(false); // Prevents log spam during client reconnections
@@ -84,6 +87,14 @@ void radio_sender_thread() {
             
             cout << "DJ: Gram utwor: " << current_song << endl;
 
+            {
+                string msg = "CURRENT " + current_song + "\n";
+                lock_guard<mutex> lock(cmd_clients_mutex);
+                for (int client_sock : cmd_clients) {
+                    send(client_sock, msg.c_str(), msg.length(), MSG_NOSIGNAL);
+                }
+            }
+            
             // Decode MP3 to raw PCM (s16le, 44.1kHz, stereo) using ffmpeg pipe
             string cmd = "ffmpeg -i \"" + current_song + "\" -f s16le -ac 2 -ar 44100 - 2>/dev/null";
             fp = popen(cmd.c_str(), "r");
@@ -138,13 +149,12 @@ void radio_sender_thread() {
     }
 }
 
-// Funkcja zamieniająca dziwne znaki na bezpieczne "_"
+//cleaning the filename to bypass errors
 string sanitize_filename(string filename) {
     string safe_name = filename;
     for (char &c : safe_name) {
-        // Zostawiamy litery, cyfry, kropkę i minus
         if (!isalnum(c) && c != '.' && c != '-') {
-            c = '_'; // Reszta (spacje, $, nawiasy) zamienia się w _
+            c = '_';
         }
     }
     return safe_name;
@@ -236,22 +246,24 @@ void handle_client(int sock) {
             break;
         }
     }
+    {
+        lock_guard<mutex> lock(cmd_clients_mutex);
+        cmd_clients.erase(remove(cmd_clients.begin(), cmd_clients.end(), sock), cmd_clients.end());
+    }
     close(sock);
     cout << "CMD: Klient rozlaczony." << endl;
 }
 
-// Funkcja wywoływana, gdy wciśniesz Ctrl+C
+//cleaning server folder when terminating program
 void signal_handler(int signum) {
     cout << "\n[SYSTEM] Otrzymano sygnał wyjścia (Ctrl+C). Sprzątanie pozostalych plikow muzycznych..." << endl;
 
     lock_guard<mutex> lock(playlist_mutex);
     for (const auto& song : playlist) {
-        // Zabezpieczenie: Nie usuwaj plików systemowych/startowych
         if (song == "elevatormusic.mp3" || song == "test.mp3") {
             continue;
         }
 
-        // remove() zwraca 0 jeśli sukces
         if (remove(song.c_str()) == 0) {
             cout << "[CLEANUP] Usunieto plik: " << song << endl;
         } else {
@@ -260,7 +272,7 @@ void signal_handler(int signum) {
     }
 
     cout << "[SYSTEM] Serwer bezpiecznie zamkniety." << endl;
-    exit(signum); // Wyjście z programu
+    exit(signum);
 }
 
 
@@ -287,6 +299,11 @@ int main() {
     while (true) {
         int new_sock = accept(server_fd, nullptr, nullptr);
         if (new_sock >= 0) {
+            {
+                lock_guard<mutex> lock(cmd_clients_mutex);
+                cmd_clients.push_back(new_sock);
+            }
+
             thread t(handle_client, new_sock);
             t.detach();
         }

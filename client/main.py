@@ -21,7 +21,7 @@ RATE = 44100
 class RadioClient:
     def __init__(self, root):
         self.root = root
-        self.root.title("Radio Studenckie - Klient (Fixed Upload)")
+        self.root.title("Radio Studenckie - Klient")
         self.root.geometry("750x500")
         
         self.cmd_sock = None
@@ -106,6 +106,14 @@ class RadioClient:
                 if "READY" in msg:
                     # Signal upload thread that sending is allowed
                     self.upload_ready_event.set()
+                elif msg.startswith("CURRENT "):
+                    raw_name = msg.split("CURRENT ", 1)[1]
+                
+                    clean_name = raw_name.replace(".mp3", "").replace("_", " ")
+                
+                    self.root.title(f"Radio Studenckie - Gra: {clean_name}")
+
+                    self.log(f"♫ TERAZ GRA: {clean_name}")
                 else:
                     self.log(f"[SERWER]: {msg}")
             except: break
