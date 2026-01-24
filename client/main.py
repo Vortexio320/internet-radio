@@ -5,6 +5,7 @@ from tkinter import scrolledtext, messagebox, filedialog
 import pyaudio
 import os
 import time
+import audioop
 
 # Configuration
 SERVER_IP = '127.0.0.1' 
@@ -21,7 +22,7 @@ class RadioClient:
     def __init__(self, root):
         self.root = root
         self.root.title("Radio Studenckie - Klient (Fixed Upload)")
-        self.root.geometry("650x500")
+        self.root.geometry("750x500")
         
         self.cmd_sock = None
         self.connected = False
@@ -58,6 +59,11 @@ class RadioClient:
 
         self.btn_skip = tk.Button(frame_controls, text="SKIP >>", command=self.skip_song, state=tk.DISABLED, bg="#ffcccc")
         self.btn_skip.pack(side=tk.LEFT, padx=10)
+
+        tk.Label(frame_controls, text="Vol:").pack(side=tk.LEFT, padx=(10, 2))
+        self.volume_scale = tk.Scale(frame_controls, from_=0, to=100, orient=tk.HORIZONTAL, resolution=1)
+        self.volume_scale.set(100) #Default: Full Volume
+        self.volume_scale.pack(side=tk.LEFT)
 
     def log(self, msg):
         self.text_area.config(state='normal')
@@ -115,17 +121,30 @@ class RadioClient:
             audio_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             audio_sock.connect((ip, AUDIO_PORT))
             
-            # Pre-buffering
+            # Pre-buffering, also implemented volume slider
             initial_buffer = []
             for _ in range(10):
                 data = audio_sock.recv(CHUNK)
                 if not data: break
+
+                try:
+                    vol = self.volume_scale.get() / 100.0
+                    data = audioop.mul(data, 2, vol)
+                except: pass
+
                 initial_buffer.append(data)
             for data in initial_buffer: stream.write(data)
             
             while self.audio_running:
                 data = audio_sock.recv(CHUNK)
                 if not data: break
+
+                try:
+                    vol_level = self.volume_scale.get() / 100.0
+                    data = audioop.mul(data, 2, vol_level)
+                except Exception:
+                    pass
+
                 stream.write(data)
         except Exception as e:
             pass
