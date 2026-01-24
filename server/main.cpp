@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <atomic>
+#include <csignal>
 
 using namespace std;
 
@@ -137,6 +138,18 @@ void radio_sender_thread() {
     }
 }
 
+// Funkcja zamieniająca dziwne znaki na bezpieczne "_"
+string sanitize_filename(string filename) {
+    string safe_name = filename;
+    for (char &c : safe_name) {
+        // Zostawiamy litery, cyfry, kropkę i minus
+        if (!isalnum(c) && c != '.' && c != '-') {
+            c = '_'; // Reszta (spacje, $, nawiasy) zamienia się w _
+        }
+    }
+    return safe_name;
+}
+
 // --- COMMAND HANDLER ---
 // Processes control commands (LIST, ADD, UPLOAD, SKIP)
 void handle_client(int sock) {
@@ -181,8 +194,8 @@ void handle_client(int sock) {
             
             if (space_pos != string::npos) {
                 int filesize = stoi(command.substr(size_pos, space_pos - size_pos));
-                string filename = command.substr(space_pos + 1);
-                
+                string original_filename = command.substr(space_pos + 1);
+                string filename = sanitize_filename(original_filename);
                 cout << "UPLOAD START: " << filename << " (" << filesize << " bajtow)" << endl;
                 // Critical: Send READY to synchronize with client before data transfer
                 send(sock, "READY\n", 6, 0);
@@ -227,7 +240,33 @@ void handle_client(int sock) {
     cout << "CMD: Klient rozlaczony." << endl;
 }
 
+// Funkcja wywoływana, gdy wciśniesz Ctrl+C
+void signal_handler(int signum) {
+    cout << "\n[SYSTEM] Otrzymano sygnał wyjścia (Ctrl+C). Sprzątanie pozostalych plikow muzycznych..." << endl;
+
+    lock_guard<mutex> lock(playlist_mutex);
+    for (const auto& song : playlist) {
+        // Zabezpieczenie: Nie usuwaj plików systemowych/startowych
+        if (song == "elevatormusic.mp3" || song == "test.mp3") {
+            continue;
+        }
+
+        // remove() zwraca 0 jeśli sukces
+        if (remove(song.c_str()) == 0) {
+            cout << "[CLEANUP] Usunieto plik: " << song << endl;
+        } else {
+            cerr << "[CLEANUP] Blad usuwania (moze juz nie istnieje): " << song << endl;
+        }
+    }
+
+    cout << "[SYSTEM] Serwer bezpiecznie zamkniety." << endl;
+    exit(signum); // Wyjście z programu
+}
+
+
+
 int main() {
+    signal(SIGINT, signal_handler);
     thread dj_thread(radio_sender_thread);
     dj_thread.detach();
 
