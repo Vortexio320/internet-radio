@@ -31,6 +31,7 @@ class RadioClient:
         # Upload synchronization flag
         self.upload_ready_event = threading.Event()
 
+        # --- GUI SETUP ---
         frame_conn = tk.Frame(root)
         frame_conn.pack(pady=5)
         tk.Label(frame_conn, text="IP:").pack(side=tk.LEFT)
@@ -42,6 +43,18 @@ class RadioClient:
 
         self.text_area = scrolledtext.ScrolledText(root, state='disabled', height=15)
         self.text_area.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+
+        frame_chat = tk.Frame(root)
+        frame_chat.pack(padx=10, pady=5, fill=tk.X)
+        
+        tk.Label(frame_chat, text="Czat:").pack(side=tk.LEFT)
+        
+        self.entry_chat = tk.Entry(frame_chat)
+        self.entry_chat.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.entry_chat.bind("<Return>", self.send_chat) # Wyślij enterem
+        
+        self.btn_send = tk.Button(frame_chat, text="Wyślij", command=self.send_chat)
+        self.btn_send.pack(side=tk.LEFT)
 
         frame_controls = tk.Frame(root)
         frame_controls.pack(pady=10)
@@ -71,9 +84,16 @@ class RadioClient:
         self.text_area.see(tk.END)
         self.text_area.config(state='disabled')
 
+    def send_chat(self, event=None):
+        msg = self.entry_chat.get()
+        if msg:
+            self.send_command(f"MSG {msg}")
+            self.entry_chat.delete(0, tk.END)
+
     def connect_all(self):
         ip = self.entry_ip.get()
         try:
+            # Establish Command Connection
             self.cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.cmd_sock.connect((ip, CMD_PORT))
             self.connected = True
@@ -94,18 +114,19 @@ class RadioClient:
         except Exception as e:
             messagebox.showerror("Błąd", f"Nie można połączyć: {e}")
 
+    # Main Command Listener Loop
     def listen_cmd(self):
         while self.connected:
             try:
-                # This thread reads EVERYTHING coming from the server
                 data = self.cmd_sock.recv(1024)
                 if not data: break
                 
                 msg = data.decode('utf-8', errors='ignore').strip()
                 
                 if "READY" in msg:
-                    # Signal upload thread that sending is allowed
+                    # Unblock the upload thread
                     self.upload_ready_event.set()
+                    # Update Window Title with current song
                 elif msg.startswith("CURRENT "):
                     raw_name = msg.split("CURRENT ", 1)[1]
                 
@@ -114,6 +135,12 @@ class RadioClient:
                     self.root.title(f"Radio Studenckie - Gra: {clean_name}")
 
                     self.log(f"♫ TERAZ GRA: {clean_name}")
+                elif msg.startswith("CHAT "):
+                    chat_content = msg[5:] 
+                    self.log(chat_content)
+                elif "Skipping..." in msg:
+                    # flush the audio buffer to avoid hearing the old song.
+                    self.root.after(0, self.do_buffer_flush)
                 else:
                     self.log(f"[SERWER]: {msg}")
             except: break
@@ -122,6 +149,8 @@ class RadioClient:
         self.audio_running = True
         threading.Thread(target=self.audio_worker, args=(ip,), daemon=True).start()
 
+    # Audio Playback Worker
+    # Handles PCM stream reception and PyAudio playback
     def audio_worker(self, ip):
         try:
             p = pyaudio.PyAudio()
@@ -179,10 +208,8 @@ class RadioClient:
     def skip_song(self):
         self.send_command("SKIP")
         
-        # Buffer flush: Stop current audio thread to cut off old song
+    def do_buffer_flush(self):
         self.audio_running = False 
-        
-        # Restart audio after short pause (500ms) to allow connection close
         self.root.after(500, lambda: self.start_audio_stream(self.entry_ip.get()))
 
     def upload_file(self):
