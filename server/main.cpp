@@ -11,6 +11,7 @@
 #include <sys/socket.h>
 #include <atomic>
 #include <csignal>
+#include <set>
 
 using namespace std;
 
@@ -19,32 +20,46 @@ using namespace std;
 #define PORT_AUDIO 8081
 #define BUFFER_SIZE 1024
 
+// --- GLOBAL STATE & SYNCHRONIZATION ---
+
+// Playlist management
 vector<string> playlist;
 mutex playlist_mutex;
 
+// Audio listeners (Streaming sockets)
 vector<int> listeners;
 mutex listeners_mutex;
 
+// Command clients (Chat, Control sockets)
 vector<int> cmd_clients;
 mutex cmd_clients_mutex;
 
+// Voting system for SKIP
+set<int> skip_voters;
+mutex skip_vote_mutex;
+
 // Atomic flags for thread synchronization
 atomic<bool> skip_requested(false);
-atomic<bool> suppress_logs(false); // Prevents log spam during client reconnections
+atomic<bool> suppress_logs(false);
 
+// Thread-safe addition of songs to the playlist
 void add_song_safe(const string& filename) {
     lock_guard<mutex> lock(playlist_mutex);
     playlist.push_back(filename);
     cout << "PLAYLIST: Dodano " << filename << ". Razem: " << playlist.size() << endl;
 }
 
-// -- DJ THREAD (AUDIO STREAMING) --
-// Handles the audio pipeline: ffmpeg decoding -> broadcasting to sockets
+// --- AUDIO STREAMING THREAD (THE DJ) ---
+// Responsible for:
+// 1. Managing the audio socket server.
+// 2. Decoding MP3s using ffmpeg.
+// 3. Broadcasting raw PCM data to all listeners.
 void radio_sender_thread() {
     cout << "DJ: Startuje na porcie " << PORT_AUDIO << endl;
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
+    // Allow socket descriptor reuse immediately after restart
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
     struct sockaddr_in address{};
@@ -71,7 +86,9 @@ void radio_sender_thread() {
 
     FILE *fp = nullptr;
 
+    // Main Audio Loop
     while(true) {
+        // If no file is playing, pick the next one
         if (!fp) {
             string current_song;
             {
@@ -79,7 +96,7 @@ void radio_sender_thread() {
                 if (!playlist.empty()) {
                     current_song = playlist.front();
                     playlist.erase(playlist.begin());
-                    playlist.push_back(current_song);
+                    playlist.push_back(current_song); // Rotate playlist
                 } else {
                     current_song = "elevatormusic.mp3";
                 }
@@ -94,7 +111,7 @@ void radio_sender_thread() {
                     send(client_sock, msg.c_str(), msg.length(), MSG_NOSIGNAL);
                 }
             }
-            
+
             // Decode MP3 to raw PCM (s16le, 44.1kHz, stereo) using ffmpeg pipe
             string cmd = "ffmpeg -i \"" + current_song + "\" -f s16le -ac 2 -ar 44100 - 2>/dev/null";
             fp = popen(cmd.c_str(), "r");
@@ -126,7 +143,7 @@ void radio_sender_thread() {
             continue;
         }
 
-        // Broadcast buffer to all connected listeners
+        // Broadcast audio chunk to all listeners
         {
             lock_guard<mutex> lock(listeners_mutex);
             auto it = listeners.begin();
@@ -158,6 +175,16 @@ string sanitize_filename(string filename) {
         }
     }
     return safe_name;
+}
+
+// Broadcasts a message to all connected command clients (Chat & System info)
+void broadcast_msg(string message) {
+    lock_guard<mutex> lock(cmd_clients_mutex);
+    if (message.back() != '\n') message += "\n";
+    
+    for (int client_sock : cmd_clients) {
+        send(client_sock, message.c_str(), message.length(), MSG_NOSIGNAL);
+    }
 }
 
 // --- COMMAND HANDLER ---
@@ -229,18 +256,53 @@ void handle_client(int sock) {
                 }
             }
         }
-        // --- SKIP SECTION ---
+        // MSG: Chat functionality
+        else if (command.rfind("MSG ", 0) == 0) {
+            string content = command.substr(4);
+            string chat_packet = "CHAT [Klient " + to_string(sock) + "]: " + content;
+            broadcast_msg(chat_packet);
+            cout << "CHAT: " << content << endl;
+        }
+        
+        // --- VOTE SKIP SECTION ---
         else if (command == "SKIP") {
-            skip_requested = true;
-            suppress_logs = true;
-            thread([](){
-                this_thread::sleep_for(chrono::seconds(2));
-                suppress_logs = false;
-            }).detach();
+            lock_guard<mutex> lock(skip_vote_mutex);
             
+            if (skip_voters.count(sock)) {
+                string info = "CHAT [SYSTEM]: Juz zaglosowales na SKIP!";
+                send(sock, info.c_str(), info.length(), MSG_NOSIGNAL); // Wyslij tylko do niego
+            } else {
+                skip_voters.insert(sock);
+                
+                // Calculate required votes (Simple majority: 50% + 1)
+                int total_users = 0;
+                {
+                    lock_guard<mutex> c_lock(cmd_clients_mutex);
+                    total_users = cmd_clients.size();
+                }
+                
+                int votes_needed = (total_users / 2) + 1;
+                int current_votes = skip_voters.size();
 
-            send(sock, "OK; Skipping...\n", 16, 0);
-            cout << "CMD: Zazadano SKIP." << endl;
+                string vote_info = "CHAT [SYSTEM]: Glos na SKIP (" + to_string(current_votes) + "/" + to_string(votes_needed) + ")";
+                broadcast_msg(vote_info);
+
+                if (current_votes >= votes_needed) {
+                    broadcast_msg("CHAT [SYSTEM]: Glosowanie zakonczone! Zmieniam utwor...");
+                    
+                    skip_voters.clear();
+                    
+                    skip_requested = true;
+                    suppress_logs = true;
+                    thread([](){
+                        this_thread::sleep_for(chrono::seconds(2));
+                        suppress_logs = false;
+                    }).detach();
+                    
+                    send(sock, "OK; Skipping...\n", 16, 0);
+                    cout << "CMD: VOTE SKIP SUKCES." << endl;
+                }
+            }
         }
         else if (command == "EXIT") {
             break;
@@ -250,11 +312,15 @@ void handle_client(int sock) {
         lock_guard<mutex> lock(cmd_clients_mutex);
         cmd_clients.erase(remove(cmd_clients.begin(), cmd_clients.end(), sock), cmd_clients.end());
     }
+    {
+        lock_guard<mutex> lock(skip_vote_mutex);
+        skip_voters.erase(sock);
+    }
     close(sock);
     cout << "CMD: Klient rozlaczony." << endl;
 }
 
-//cleaning server folder when terminating program
+//cleaning server folder when terminating program (CTRL + C)
 void signal_handler(int signum) {
     cout << "\n[SYSTEM] Otrzymano sygnał wyjścia (Ctrl+C). Sprzątanie pozostalych plikow muzycznych..." << endl;
 
@@ -279,9 +345,13 @@ void signal_handler(int signum) {
 
 int main() {
     signal(SIGINT, signal_handler);
+    signal(SIGPIPE, SIG_IGN);
+
+    // Start the Audio Thread
     thread dj_thread(radio_sender_thread);
     dj_thread.detach();
 
+    // Setup Command Socket
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -303,7 +373,7 @@ int main() {
                 lock_guard<mutex> lock(cmd_clients_mutex);
                 cmd_clients.push_back(new_sock);
             }
-
+            // Handle each client in a separate thread
             thread t(handle_client, new_sock);
             t.detach();
         }
