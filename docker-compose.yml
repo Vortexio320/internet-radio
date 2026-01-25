@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: radio_server
+    ports:
+      - "8080:8080" # Command port
+      - "8081:8081" # Audio port
+    volumes:
+      # Mount the current directory as /app in the container to persist files
+      # Note: We mount to /app but the binary is also compiled there.
+      # To avoid overwriting the binary or issues, we might want to be careful.
+      # Ideally we only mount a 'songs' directory, but the server code reads from valid paths.
+      # Let's assume files are dropped in the working directory.
+      - ./server:/app
+    # Ensure standard output is flush immediately
+    tty: true
+    restart: unless-stopped
