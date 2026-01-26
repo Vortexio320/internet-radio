@@ -114,6 +114,8 @@ void radio_sender_thread() {
 
             // Decode MP3 to raw PCM (s16le, 44.1kHz, stereo) using ffmpeg pipe
             string cmd = "ffmpeg -i \"" + current_song + "\" -f s16le -ac 2 -ar 44100 - 2>/dev/null";
+            //debug line
+            //string cmd = "ffmpeg -i \"" + current_song + "\" -f s16le -ac 2 -ar 44100 -";
             fp = popen(cmd.c_str(), "r");
             
             if (!fp) {
@@ -162,7 +164,7 @@ void radio_sender_thread() {
         }
         
         // Short sleep (5ms) to pace the stream and avoid CPU spinning
-        this_thread::sleep_for(chrono::microseconds(5000));
+        this_thread::sleep_for(chrono::microseconds(22000));
     }
 }
 
