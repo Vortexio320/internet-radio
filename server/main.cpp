@@ -218,14 +218,7 @@ void handle_client(int sock) {
             }
             send(sock, response.c_str(), response.length(), 0);
         }
-        // --- ADD SECTION ---
-        else if (command.rfind("ADD ", 0) == 0) {
-            string filename = command.substr(4);
-            if (!filename.empty()) {
-                add_song_safe(filename);
-                send(sock, "OK\n", 3, 0);
-            }
-        }
+
         // --- UPLOAD SECTION ---
         else if (command.rfind("UPLOAD ", 0) == 0) {
             size_t size_pos = 7;
@@ -328,7 +321,7 @@ void signal_handler(int signum) {
 
     lock_guard<mutex> lock(playlist_mutex);
     for (const auto& song : playlist) {
-        if (song == "elevatormusic.mp3" || song == "test.mp3") {
+        if (song == "elevatormusic.mp3") {
             continue;
         }
 

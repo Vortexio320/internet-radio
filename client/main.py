@@ -58,11 +58,6 @@ class RadioClient:
 
         frame_controls = tk.Frame(root)
         frame_controls.pack(pady=10)
-        self.entry_song = tk.Entry(frame_controls, width=20)
-        self.entry_song.pack(side=tk.LEFT, padx=5)
-        
-        self.btn_add = tk.Button(frame_controls, text="Dodaj nazwę", command=self.add_song, state=tk.DISABLED)
-        self.btn_add.pack(side=tk.LEFT, padx=2)
         
         self.btn_list = tk.Button(frame_controls, text="Lista", command=self.get_list, state=tk.DISABLED)
         self.btn_list.pack(side=tk.LEFT, padx=2)
@@ -106,7 +101,6 @@ class RadioClient:
             
             self.log(f"Połączono z serwerem {ip}")
             self.btn_connect.config(state=tk.DISABLED)
-            self.btn_add.config(state=tk.NORMAL)
             self.btn_list.config(state=tk.NORMAL)
             self.btn_upload.config(state=tk.NORMAL)
             self.btn_skip.config(state=tk.NORMAL)
@@ -195,12 +189,6 @@ class RadioClient:
 
     def send_command(self, cmd):
         if self.cmd_sock: self.cmd_sock.send(cmd.encode('utf-8'))
-
-    def add_song(self):
-        name = self.entry_song.get()
-        if name:
-            self.send_command(f"ADD {name}")
-            self.entry_song.delete(0, tk.END)
 
     def get_list(self):
         self.send_command("LIST")
